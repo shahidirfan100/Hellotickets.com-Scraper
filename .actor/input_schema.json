@@ -1,0 +1,35 @@
+{
+  "title": "Hellotickets Scraper",
+  "description": "Scrape tours, attraction tickets, and city passes from Hellotickets category pages. Provide a Hellotickets listing URL and collect structured travel data at scale.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Start scraping from a specific Hellotickets category or city page.",
+      "editor": "textfield",
+      "prefill": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York"
+    },
+    "results_wanted": {
+      "title": "Maximum number of items",
+      "type": "integer",
+      "description": "Maximum number of unique ticket or tour listings to save.",
+      "minimum": 1,
+      "default": 20,
+      "prefill": 20,
+      "editor": "number"
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Use Apify Proxy for reliable access to Hellotickets pages and JSON endpoints.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": false
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
