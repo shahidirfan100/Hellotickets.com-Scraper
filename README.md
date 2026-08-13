@@ -66,10 +66,10 @@ Each dataset item represents one unique Hellotickets experience. The exact field
 
 ## How to use Hellotickets Listings Scraper
 
-1. Open a public Hellotickets city or category page that contains the experiences you want to collect.
-2. Copy the complete page URL.
-3. Open this Actor in Apify and paste the URL into `startUrl`.
-4. Optionally enter a `keyword` or `location` filter.
+1. Provide a Hellotickets city or category URL in `startUrl` to search that catalog.
+2. Provide only `keyword` to search across the worldwide Hellotickets destination directory.
+3. Provide `keyword` and `location` to search matching cities, states, countries, or locales.
+4. Leave all search fields empty to run the prefilled example destination.
 5. Set `results_wanted` to the maximum number of unique listings you want.
 6. Run the Actor and review the dataset preview.
 7. Download the results or connect the dataset to your research, reporting, or automation workflow.
@@ -78,12 +78,12 @@ Each dataset item represents one unique Hellotickets experience. The exact field
 
 | Parameter        | Type    | Required | Default                                                      | Description                                                                                        |
 | ---------------- | ------- | -------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `startUrl`       | String  | No       | `https://www.hellotickets.com/us/new-york/c-1?qs=New%20York` | Public Hellotickets city or category page URL to start from.                                       |
-| `keyword`        | String  | No       | Empty                                                        | Optional terms matched against listing titles, descriptions, providers, and collection names.      |
-| `location`       | String  | No       | Empty                                                        | Optional location terms matched against the URL, city, locale, page, and collection context.       |
+| `startUrl`       | String  | No       | `https://www.hellotickets.com/us/new-york/c-1?qs=New%20York` | Optional public Hellotickets city or category URL.                                                |
+| `keyword`        | String  | No       | Empty                                                        | Terms matched against listing titles, descriptions, providers, and collection names.              |
+| `location`       | String  | No       | Empty                                                        | City, state, country, or locale used to select destinations when no URL is supplied.               |
 | `results_wanted` | Integer | No       | `20`                                                         | Maximum number of unique tour, ticket, pass, or experience listings to save. Minimum value is `1`. |
 
-The Actor accepts one `startUrl` per run. The city is selected from the `/c-<cityId>` segment in that URL. To collect several destinations, create separate runs or schedules with a different URL for each destination.
+When `startUrl` is supplied, the city is selected from its `/c-<cityId>` segment. When it is omitted and a search option is supplied, the Actor discovers destinations from Hellotickets' worldwide city directory and searches catalogs until it reaches `results_wanted` or exhausts the matching destinations.
 
 ## Output Data
 
@@ -102,26 +102,25 @@ Collect up to 20 unique listings from a New York city page.
 }
 ```
 
-### Keyword-Focused Collection
+### Worldwide Keyword Search
 
-Use `keyword` to keep listings related to a specific interest, such as Broadway experiences.
+Use only `keyword` to search worldwide instead of falling back to New York.
 
 ```json
 {
-    "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=Broadway",
     "keyword": "Broadway",
     "results_wanted": 50
 }
 ```
 
-### Location-Focused Collection
+### Keyword and Location Search
 
-Use `location` to keep records matching the destination context in the submitted URL.
+Use `location` to limit broad search to matching cities or countries.
 
 ```json
 {
-    "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
-    "location": "New York",
+    "keyword": "museum",
+    "location": "United States",
     "results_wanted": 50
 }
 ```
@@ -197,7 +196,7 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 - **Test with a small target** - Start with `results_wanted: 20` and inspect the dataset before requesting a larger collection.
 - **Match the target to the destination** - Smaller destinations may contain fewer unique experiences than major travel markets.
 - **Use query variations carefully** - Different `qs` values can surface different experiences, but similar queries may return overlapping listings.
-- **Filter after choosing the city** - `location` narrows the selected city context; use a different `startUrl` when you need another city.
+- **Search broadly when needed** - Use keyword-only for worldwide discovery, or add `location` to limit the destination directory before catalogs are fetched.
 - **Schedule destination checks** - Recurring runs are useful for tracking changes in prices, ratings, review counts, and visible inventory.
 
 ## Integrations and export formats
@@ -219,7 +218,7 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 
 ### Can I collect tours and attraction tickets from any Hellotickets destination?
 
-Yes. Use a public Hellotickets city or category page as `startUrl`. The available records depend on the destination, category, and listings published on that page.
+Yes. Use a public Hellotickets city or category page as `startUrl`, or omit the URL and use a keyword to search the worldwide destination directory.
 
 ### Can I search with a keyword?
 
@@ -227,7 +226,7 @@ Yes. Enter a value in `keyword` to match listing titles, original titles, descri
 
 ### Can I filter by location?
 
-Yes. Enter a city or locale in `location`. The filter checks the submitted page and listing context; use `startUrl` to select the city catalog.
+Yes. Enter a city, state, country, or locale in `location`. Without a URL, it selects matching destinations before catalogs are searched. With a URL, it filters records from that URL's catalog.
 
 ### Why did the Actor return fewer records than `results_wanted`?
 

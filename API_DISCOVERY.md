@@ -1,5 +1,12 @@
 ## Selected API
 
+## Broad destination discovery
+
+- Endpoint: `https://www.hellotickets.com/api/cities?page=:page`
+- Method: `GET`
+- Response shape: `{ "cities": [...], "pagination": { "page": 1, "pageSize": 50, "total": ... } }`
+- Use: Keyword-only and keyword-plus-location runs scan this worldwide directory progressively, starting with the most popular destinations and stopping after `results_wanted` matching listings are found.
+
 - Endpoint: `https://www.hellotickets.com/api/cities/:cityId/top-subcategories?carouselItemsAmount=12`
 - Method: `GET`
 - Auth: None

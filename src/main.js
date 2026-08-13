@@ -1,10 +1,13 @@
 import { Actor, log } from 'apify';
 import { gotScraping } from 'got-scraping';
 
-const DEFAULT_START_URL = 'https://www.hellotickets.com/us/new-york/c-1?qs=New%20York';
+const PREFILLED_START_URL = 'https://www.hellotickets.com/us/new-york/c-1?qs=New%20York';
+const CITIES_API_URL = 'https://www.hellotickets.com/api/cities';
 const API_PAGE_SIZE = 12;
 const API_MAX_ATTEMPTS = 3;
 const REQUEST_TIMEOUT_MS = 30000;
+const CITY_DIRECTORY_PAGE_SIZE = 50;
+const BROAD_SEARCH_CONCURRENCY = 4;
 const USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0',
@@ -13,40 +16,206 @@ const USER_AGENTS = [
 await Actor.init();
 
 const input = (await Actor.getInput()) || {};
-const { startUrl = DEFAULT_START_URL, keyword = '', location = '', results_wanted: rawResultsWanted = 20 } = input;
+const { startUrl = '', keyword = '', location = '', results_wanted: rawResultsWanted = 20 } = input;
 
 const resultsWanted = normalizePositiveInteger(rawResultsWanted, 20);
-const targetUrl = normalizeHttpUrl(startUrl || DEFAULT_START_URL);
+const hasKeyword = hasValue(keyword);
+const hasLocation = hasValue(location);
+const hasNonPrefilledUrl = hasValue(startUrl) && !isPrefilledStartUrl(startUrl);
+const useBroadSearch = hasKeyword || hasLocation;
+const targetUrl = hasNonPrefilledUrl || !useBroadSearch
+    ? normalizeHttpUrl(startUrl || PREFILLED_START_URL)
+    : null;
 
 try {
-    const targetContext = parseTargetContext(targetUrl);
-    log.info(`Start run | target=${targetUrl} | results=${resultsWanted}`);
-
-    const apiData = await fetchCityCatalog(targetContext);
-    const records = extractRecords(apiData, targetContext);
-    const filteredRecords = records
-        .filter((record) => matchesKeyword(record, keyword))
-        .filter((record) => matchesLocation(record, location));
-    const items = filteredRecords.slice(0, resultsWanted);
-
-    log.info(`Catalog records=${records.length} | after_filters=${filteredRecords.length}`);
+    const items = targetUrl
+        ? await searchSingleCatalog(targetUrl, keyword, location, resultsWanted)
+        : await searchBroadCatalog(keyword, location, resultsWanted);
 
     if (items.length === 0) {
         throw new Error(
-            'The Hellotickets catalog returned no matching listings. Check the start URL, keyword, or location filter.',
+            'The Hellotickets catalog returned no matching listings. Check the URL, keyword, or location filter.',
         );
     }
 
     await Actor.pushData(items);
-    log.info(`Done | saved=${items.length} | duplicates_removed=${records.duplicatesRemoved}`);
+    log.info(`Done | saved=${items.length}`);
 } finally {
     await Actor.exit();
+}
+
+async function searchSingleCatalog(targetUrlValue, filterKeyword, filterLocation, limit) {
+    const targetContext = parseTargetContext(targetUrlValue);
+    log.info(`Start run | mode=url | target=${targetUrlValue} | results=${limit}`);
+
+    const apiData = await fetchCityCatalog(targetContext);
+    const records = extractRecords(apiData, targetContext);
+    const filteredRecords = records
+        .filter((record) => matchesKeyword(record, filterKeyword))
+        .filter((record) => matchesLocation(record, filterLocation));
+
+    log.info(`Catalog records=${records.length} | after_filters=${filteredRecords.length}`);
+    return filteredRecords.slice(0, limit);
+}
+
+async function searchBroadCatalog(filterKeyword, filterLocation, limit) {
+    log.info(
+        `Start run | mode=broad | keyword=${String(filterKeyword || 'none')} | location=${String(
+            filterLocation || 'worldwide',
+        )} | results=${limit}`,
+    );
+
+    const firstPage = await fetchCitiesPage(1);
+    const totalPages = Math.ceil(
+        (firstPage.pagination?.total || firstPage.cities.length) /
+            (firstPage.pagination?.pageSize || CITY_DIRECTORY_PAGE_SIZE),
+    );
+    const locationTerms = tokenize(filterLocation);
+    const recordsByKey = new Map();
+    let catalogsProcessed = 0;
+    let duplicatesRemoved = 0;
+    let citiesAvailable = 0;
+    let citiesSelected = 0;
+
+    for (let page = 1; page <= totalPages && recordsByKey.size < limit; page += 1) {
+        const directoryPage = page === 1 ? firstPage : await fetchCitiesPage(page);
+        const cities = (directoryPage.cities || []).filter((city) => city.status === 'active');
+        const matchingCities = locationTerms.length
+            ? cities.filter((city) => matchesCityLocation(city, locationTerms))
+            : cities;
+
+        citiesAvailable += cities.length;
+        citiesSelected += matchingCities.length;
+
+        for (
+            let index = 0;
+            index < matchingCities.length && recordsByKey.size < limit;
+            index += BROAD_SEARCH_CONCURRENCY
+        ) {
+            const cityBatch = matchingCities.slice(index, index + BROAD_SEARCH_CONCURRENCY);
+            const catalogResults = await Promise.allSettled(
+                cityBatch.map(async (city) => {
+                    const cityContext = parseTargetContext(buildCityPageUrl(city, filterKeyword));
+                    const apiData = await fetchCityCatalog(cityContext, { logResult: false });
+                    return { city, records: extractRecords(apiData, cityContext) };
+                }),
+            );
+
+            let skippedCatalogs = 0;
+            for (const result of catalogResults) {
+                catalogsProcessed += 1;
+                if (result.status === 'rejected') {
+                    skippedCatalogs += 1;
+                    continue;
+                }
+
+                for (const record of result.value.records) {
+                    if (!matchesKeyword(record, filterKeyword)) continue;
+                    const key = String(record.alias_id || record.id || record.product_url);
+                    const existing = recordsByKey.get(key);
+                    if (existing) {
+                        recordsByKey.set(key, mergeRecords(existing, record));
+                        duplicatesRemoved += 1;
+                    } else {
+                        recordsByKey.set(key, record);
+                    }
+                }
+            }
+
+            if (skippedCatalogs > 0) {
+                log.warning(`Broad catalog batch skipped=${skippedCatalogs}/${catalogResults.length}`);
+            }
+
+            log.info(
+                `Broad search progress | directory_page=${page}/${totalPages} | catalogs=${catalogsProcessed} | matches=${recordsByKey.size}`,
+            );
+        }
+    }
+
+    if (locationTerms.length && citiesSelected === 0) {
+        throw new Error(`No Hellotickets destinations matched location: ${filterLocation}`);
+    }
+
+    log.info(
+        `Broad search complete | catalogs=${catalogsProcessed} | cities_available=${citiesAvailable} | cities_selected=${citiesSelected} | matches=${recordsByKey.size} | duplicates_removed=${duplicatesRemoved}`,
+    );
+    return Array.from(recordsByKey.values()).slice(0, limit);
+}
+
+async function fetchCitiesPage(page) {
+    let lastError;
+
+    for (let attempt = 0; attempt < API_MAX_ATTEMPTS; attempt += 1) {
+        try {
+            const response = await gotScraping.get(`${CITIES_API_URL}?page=${page}`, {
+                headers: getRequestHeaders('https://www.hellotickets.com/'),
+                useHeaderGenerator: false,
+                http2: false,
+                throwHttpErrors: false,
+                timeout: { request: REQUEST_TIMEOUT_MS },
+            });
+
+            const contentType = String(response.headers['content-type'] || '');
+            const body = String(response.body || '');
+            if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`HTTP ${response.statusCode}`);
+            if (!contentType.includes('json')) throw new Error('The destination directory response was not JSON.');
+
+            const data = JSON.parse(body);
+            if (!Array.isArray(data?.cities)) throw new Error('The destination directory has no cities array.');
+            return data;
+        } catch (error) {
+            lastError = error;
+            if (attempt < API_MAX_ATTEMPTS - 1) {
+                log.warning(`Destination directory page ${page} attempt ${attempt + 1}/${API_MAX_ATTEMPTS} failed: ${error.message}`);
+            }
+        }
+    }
+
+    throw new Error(`Unable to fetch destination directory page ${page}: ${lastError?.message || 'unknown error'}`);
+}
+
+function buildCityPageUrl(city, filterKeyword) {
+    const pageUrl = new URL(city.url, 'https://www.hellotickets.com');
+    if (hasValue(filterKeyword)) pageUrl.searchParams.set('qs', String(filterKeyword).trim());
+    return pageUrl.href;
+}
+
+function matchesCityLocation(city, locationTerms) {
+    const haystack = tokenize(
+        [city.name, city.slugName, city.state, city.country, city.countrySlugName, city.url]
+            .filter(Boolean)
+            .join(' '),
+    );
+
+    return locationTerms.every((term) => haystack.includes(term));
+}
+
+function getRequestHeaders(referer) {
+    return {
+        'user-agent': USER_AGENTS[0],
+        accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+        referer,
+        origin: 'https://www.hellotickets.com',
+    };
 }
 
 function normalizePositiveInteger(value, fallback) {
     const parsed = Number.parseInt(String(value), 10);
     if (!Number.isFinite(parsed) || parsed < 1) return fallback;
     return parsed;
+}
+
+function hasValue(value) {
+    return typeof value === 'string' ? value.trim().length > 0 : value != null;
+}
+
+function isPrefilledStartUrl(value) {
+    try {
+        return normalizeHttpUrl(value) === normalizeHttpUrl(PREFILLED_START_URL);
+    } catch {
+        return false;
+    }
 }
 
 function normalizeHttpUrl(value) {
@@ -87,7 +256,7 @@ function parseTargetContext(urlValue) {
     };
 }
 
-async function fetchCityCatalog(context) {
+async function fetchCityCatalog(context, { logResult = true } = {}) {
     const apiUrl = `${context.baseOrigin}/api/cities/${context.cityId}/top-subcategories?carouselItemsAmount=${API_PAGE_SIZE}`;
     let lastError;
 
@@ -129,7 +298,9 @@ async function fetchCityCatalog(context) {
                 throw new Error(`The JSON response has no subcategories array. Keys: ${keys}`);
             }
 
-            log.info(`Fetched city catalog | city=${context.cityId} | subcategories=${data.subcategories.length}`);
+            if (logResult) {
+                log.info(`Fetched city catalog | city=${context.cityId} | subcategories=${data.subcategories.length}`);
+            }
             return data;
         } catch (error) {
             lastError = error;

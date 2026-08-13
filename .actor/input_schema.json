@@ -7,7 +7,7 @@
         "startUrl": {
             "title": "Start URL",
             "type": "string",
-            "description": "Start scraping from a specific Hellotickets category or city page.",
+            "description": "Optional Hellotickets city or category URL. If omitted while keyword or location is provided, the Actor searches the Hellotickets destination directory.",
             "editor": "textfield",
             "prefill": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York"
         },
@@ -21,7 +21,7 @@
         "location": {
             "title": "Location",
             "type": "string",
-            "description": "Optional location filter such as New York, London, or a locale code. The city is selected by startUrl.",
+            "description": "Optional city, state, country, or locale filter. Without a URL, matching destinations are searched across the Hellotickets worldwide directory.",
             "editor": "textfield",
             "prefill": ""
         },
