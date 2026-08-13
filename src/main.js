@@ -17,12 +17,10 @@ const input = (await Actor.getInput()) || {};
 const {
     startUrl,
     results_wanted: rawResultsWanted = 20,
-    proxyConfiguration,
 } = input;
 
 const resultsWanted = normalizePositiveInteger(rawResultsWanted, 20);
 const targetUrl = startUrl || DEFAULT_START_URL;
-const proxyConfig = proxyConfiguration ? await Actor.createProxyConfiguration(proxyConfiguration) : undefined;
 const collectionPageExpansionLimit = Math.min(
     MAX_COLLECTION_PAGE_EXPANSIONS,
     Math.max(BASE_COLLECTION_PAGE_EXPANSIONS, resultsWanted * 2),
@@ -30,7 +28,7 @@ const collectionPageExpansionLimit = Math.min(
 const collectionQueueLimit = Math.min(MAX_COLLECTION_QUEUE_SIZE, Math.max(250, collectionPageExpansionLimit * 6));
 
 try {
-    const listingHtml = await fetchText(targetUrl, proxyConfig);
+    const listingHtml = await fetchText(targetUrl);
     const pageData = extractNuxtPageData(listingHtml);
 
     if (!pageData) {
@@ -47,7 +45,7 @@ try {
     if (cityId) {
         const topSubcategoriesUrl = `${baseOrigin}/api/cities/${cityId}/top-subcategories?carouselItemsAmount=12`;
         try {
-            apiTopSubcategories = await fetchJson(topSubcategoriesUrl, proxyConfig, targetUrl);
+            apiTopSubcategories = await fetchJson(topSubcategoriesUrl, targetUrl);
             log.info(`Fetched top subcategories API for city ${cityId}.`);
         } catch (error) {
             log.warning(`Top subcategories API failed, using page data fallback: ${error.message}`);
@@ -96,7 +94,7 @@ try {
         visitedCollectionUrls.add(nextCollectionUrl);
 
         try {
-            const relatedHtml = await fetchText(nextCollectionUrl, proxyConfig);
+            const relatedHtml = await fetchText(nextCollectionUrl);
             const relatedPageData = extractNuxtPageData(relatedHtml);
             if (!relatedPageData) continue;
 
@@ -153,10 +151,9 @@ function normalizePositiveInteger(value, fallback) {
     return parsed;
 }
 
-async function fetchText(url, proxyConfiguration) {
+async function fetchText(url) {
     const response = await gotScraping({
         url,
-        proxyUrl: proxyConfiguration ? await proxyConfiguration.newUrl() : undefined,
         headers: {
             'user-agent': USER_AGENT,
             accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -168,10 +165,9 @@ async function fetchText(url, proxyConfiguration) {
     return response.body;
 }
 
-async function fetchJson(url, proxyConfiguration, referer) {
+async function fetchJson(url, referer) {
     const response = await gotScraping({
         url,
-        proxyUrl: proxyConfiguration ? await proxyConfiguration.newUrl() : undefined,
         headers: {
             'user-agent': USER_AGENT,
             accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
