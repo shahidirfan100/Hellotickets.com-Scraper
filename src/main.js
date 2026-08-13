@@ -1,146 +1,44 @@
-import vm from 'node:vm';
-
-import { load as cheerioLoad } from 'cheerio';
 import { Actor, log } from 'apify';
-import { Dataset } from 'crawlee';
 import { gotScraping } from 'got-scraping';
 
 const DEFAULT_START_URL = 'https://www.hellotickets.com/us/new-york/c-1?qs=New%20York';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0';
-const BASE_COLLECTION_PAGE_EXPANSIONS = 40;
-const MAX_COLLECTION_PAGE_EXPANSIONS = 300;
-const MAX_COLLECTION_QUEUE_SIZE = 1500;
+const API_PAGE_SIZE = 12;
+const API_MAX_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 30000;
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0',
+];
 
 await Actor.init();
 
 const input = (await Actor.getInput()) || {};
-const {
-    startUrl,
-    results_wanted: rawResultsWanted = 20,
-} = input;
+const { startUrl = DEFAULT_START_URL, keyword = '', location = '', results_wanted: rawResultsWanted = 20 } = input;
 
 const resultsWanted = normalizePositiveInteger(rawResultsWanted, 20);
-const targetUrl = startUrl || DEFAULT_START_URL;
-const collectionPageExpansionLimit = Math.min(
-    MAX_COLLECTION_PAGE_EXPANSIONS,
-    Math.max(BASE_COLLECTION_PAGE_EXPANSIONS, resultsWanted * 2),
-);
-const collectionQueueLimit = Math.min(MAX_COLLECTION_QUEUE_SIZE, Math.max(250, collectionPageExpansionLimit * 6));
+const targetUrl = normalizeHttpUrl(startUrl || DEFAULT_START_URL);
 
 try {
-    const listingHtml = await fetchText(targetUrl);
-    const pageData = extractNuxtPageData(listingHtml);
+    const targetContext = parseTargetContext(targetUrl);
+    log.info(`Start run | target=${targetUrl} | results=${resultsWanted}`);
 
-    if (!pageData) {
-        throw new Error('Could not extract Hellotickets page data from the start URL.');
-    }
+    const apiData = await fetchCityCatalog(targetContext);
+    const records = extractRecords(apiData, targetContext);
+    const filteredRecords = records
+        .filter((record) => matchesKeyword(record, keyword))
+        .filter((record) => matchesLocation(record, location));
+    const items = filteredRecords.slice(0, resultsWanted);
 
-    const pageUrl = new URL(targetUrl);
-    const baseOrigin = pageUrl.origin;
-    const locale = pageUrl.pathname.split('/').filter(Boolean)[0] || 'us';
-    const cityId = String(pageData.cityId || '').trim();
-    const pageTitle = pageData.metaTags?.title || pageData.scriptDataLayer?.pageTitle || 'Hellotickets listing';
-
-    let apiTopSubcategories = null;
-    if (cityId) {
-        const topSubcategoriesUrl = `${baseOrigin}/api/cities/${cityId}/top-subcategories?carouselItemsAmount=12`;
-        try {
-            apiTopSubcategories = await fetchJson(topSubcategoriesUrl, targetUrl);
-            log.info(`Fetched top subcategories API for city ${cityId}.`);
-        } catch (error) {
-            log.warning(`Top subcategories API failed, using page data fallback: ${error.message}`);
-        }
-    }
-
-    const sectionEntries = buildSectionEntries({
-        pageData,
-        apiTopSubcategories,
-        cityId,
-        locale,
-        pageUrl: targetUrl,
-        pageTitle,
-        baseOrigin,
-    });
-
-    const mergedRecords = new Map();
-
-    for (const entry of sectionEntries) {
-        collectProductRecords(entry.value, entry.context, baseOrigin, mergedRecords);
-    }
-
-    const initialCollectionUrls = collectCollectionUrlsFromEntries(sectionEntries, baseOrigin);
-    const initialPageUrl = normalizeCollectionUrl(targetUrl, baseOrigin);
-    const visitedCollectionUrls = new Set(initialPageUrl ? [initialPageUrl] : []);
-    const queuedCollectionUrls = new Set();
-    const collectionQueue = [];
-    enqueueCollectionUrls(initialCollectionUrls, {
-        queue: collectionQueue,
-        queuedUrls: queuedCollectionUrls,
-        visitedUrls: visitedCollectionUrls,
-        baseOrigin,
-        maxQueueSize: collectionQueueLimit,
-    });
-
-    let expandedCollectionPages = 0;
-
-    while (
-        collectionQueue.length
-        && mergedRecords.size < resultsWanted
-        && expandedCollectionPages < collectionPageExpansionLimit
-    ) {
-        const nextCollectionUrl = collectionQueue.shift();
-        if (!nextCollectionUrl || visitedCollectionUrls.has(nextCollectionUrl)) continue;
-
-        visitedCollectionUrls.add(nextCollectionUrl);
-
-        try {
-            const relatedHtml = await fetchText(nextCollectionUrl);
-            const relatedPageData = extractNuxtPageData(relatedHtml);
-            if (!relatedPageData) continue;
-
-            const relatedPage = new URL(nextCollectionUrl);
-            const relatedLocale = relatedPage.pathname.split('/').filter(Boolean)[0] || locale;
-            const relatedCityId = String(relatedPageData.cityId || cityId || '').trim();
-            const relatedTitle = relatedPageData.metaTags?.title || relatedPageData.scriptDataLayer?.pageTitle || pageTitle;
-
-            const relatedEntries = buildSectionEntries({
-                pageData: relatedPageData,
-                apiTopSubcategories: null,
-                cityId: relatedCityId,
-                locale: relatedLocale,
-                pageUrl: nextCollectionUrl,
-                pageTitle: relatedTitle,
-                baseOrigin,
-            });
-
-            for (const entry of relatedEntries) {
-                collectProductRecords(entry.value, entry.context, baseOrigin, mergedRecords);
-            }
-
-            const discoveredCollectionUrls = collectCollectionUrlsFromEntries(relatedEntries, baseOrigin);
-            enqueueCollectionUrls(discoveredCollectionUrls, {
-                queue: collectionQueue,
-                queuedUrls: queuedCollectionUrls,
-                visitedUrls: visitedCollectionUrls,
-                baseOrigin,
-                maxQueueSize: collectionQueueLimit,
-            });
-        } catch (error) {
-            log.warning(`Failed to expand related collection ${nextCollectionUrl}: ${error.message}`);
-        }
-
-        expandedCollectionPages += 1;
-    }
-
-    const items = Array.from(mergedRecords.values()).slice(0, resultsWanted);
+    log.info(`Catalog records=${records.length} | after_filters=${filteredRecords.length}`);
 
     if (items.length === 0) {
-        throw new Error('No product records were extracted from the provided Hellotickets page.');
+        throw new Error(
+            'The Hellotickets catalog returned no matching listings. Check the start URL, keyword, or location filter.',
+        );
     }
 
-    await Dataset.pushData(items);
-    log.info(`Expanded ${expandedCollectionPages} related collection pages (limit: ${collectionPageExpansionLimit}).`);
-    log.info(`Saved ${items.length} unique Hellotickets listings from ${targetUrl}.`);
+    await Actor.pushData(items);
+    log.info(`Done | saved=${items.length} | duplicates_removed=${records.duplicatesRemoved}`);
 } finally {
     await Actor.exit();
 }
@@ -151,230 +49,172 @@ function normalizePositiveInteger(value, fallback) {
     return parsed;
 }
 
-async function fetchText(url) {
-    const response = await gotScraping({
-        url,
-        headers: {
-            'user-agent': USER_AGENT,
-            accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'accept-language': 'en-US,en;q=0.9',
-        },
-        timeout: { request: 30000 },
-    });
-
-    return response.body;
+function normalizeHttpUrl(value) {
+    try {
+        const url = new URL(String(value));
+        if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol');
+        return url.href;
+    } catch {
+        throw new Error('startUrl must be a valid HTTP or HTTPS Hellotickets URL.');
+    }
 }
 
-async function fetchJson(url, referer) {
-    const response = await gotScraping({
-        url,
-        headers: {
-            'user-agent': USER_AGENT,
-            accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
-            'accept-language': 'en-US,en;q=0.9',
-            referer: referer || DEFAULT_START_URL,
-        },
-        timeout: { request: 30000 },
-    });
+function parseTargetContext(urlValue) {
+    const parsedUrl = new URL(urlValue);
+    const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
+    const citySegmentIndex = pathSegments.findIndex((segment) => /^c-\d+$/i.test(segment));
 
-    return JSON.parse(response.body);
-}
+    if (parsedUrl.hostname !== 'www.hellotickets.com' || citySegmentIndex < 1) {
+        throw new Error(
+            'startUrl must be a public Hellotickets city or category URL containing a /c-<cityId> path segment.',
+        );
+    }
 
-function extractNuxtPageData(html) {
-    const marker = 'window.__NUXT__=';
-    const startIndex = html.indexOf(marker);
-    if (startIndex === -1) return null;
+    const citySegment = pathSegments[citySegmentIndex];
+    const citySlug = pathSegments[citySegmentIndex - 1];
+    const locale = pathSegments[0] || 'us';
+    const cityId = citySegment.slice(2);
+    const queryKeyword = parsedUrl.searchParams.get('qs') || '';
+    const pageTitle = queryKeyword || `${formatSlug(citySlug)} experiences`;
 
-    const endIndex = html.indexOf('</script>', startIndex);
-    if (endIndex === -1) return null;
-
-    const nuxtPayload = html.slice(startIndex + marker.length, endIndex).trim().replace(/;$/, '');
-    const sandbox = { window: {} };
-
-    vm.runInNewContext(`window.__NUXT__=${nuxtPayload};`, sandbox, { timeout: 3000 });
-
-    return sandbox.window.__NUXT__?.data?.[0] || null;
-}
-
-function buildSectionEntries({ pageData, apiTopSubcategories, cityId, locale, pageUrl, pageTitle, baseOrigin }) {
-    const baseContext = {
+    return {
         cityId,
+        citySlug,
         locale,
-        pageUrl,
+        pageUrl: parsedUrl.href,
         pageTitle,
-        baseOrigin,
+        baseOrigin: parsedUrl.origin,
     };
-    const entries = [];
+}
 
-    if (Array.isArray(pageData.searchItems) && pageData.searchItems.length) {
-        entries.push({
-            value: pageData.searchItems,
-            context: {
-                ...baseContext,
-                section: 'search_items',
-                collectionTitle: pageTitle,
-                collectionUrl: pageUrl,
-            },
-        });
-    }
+async function fetchCityCatalog(context) {
+    const apiUrl = `${context.baseOrigin}/api/cities/${context.cityId}/top-subcategories?carouselItemsAmount=${API_PAGE_SIZE}`;
+    let lastError;
 
-    const apiTopSubcategoryItems = extractCollectionItems(apiTopSubcategories);
-    const pageTopSubcategoryItems = Array.isArray(pageData.topSubcategories)
-            ? pageData.topSubcategories
-            : [];
-    const topSubcategories = apiTopSubcategoryItems.length ? apiTopSubcategoryItems : pageTopSubcategoryItems;
+    for (let attempt = 0; attempt < API_MAX_ATTEMPTS; attempt += 1) {
+        const userAgent = USER_AGENTS[attempt % USER_AGENTS.length];
 
-    if (topSubcategories.length) {
-        entries.push({
-            value: topSubcategories,
-            context: {
-                ...baseContext,
-                section: apiTopSubcategoryItems.length ? 'top_subcategories_api' : 'top_subcategories_page',
-                collectionTitle: 'Top subcategories',
-                collectionUrl: pageUrl,
-            },
-        });
-    }
+        try {
+            const response = await gotScraping.get(apiUrl, {
+                headers: {
+                    'user-agent': userAgent,
+                    accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
+                    'accept-language': 'en-US,en;q=0.9',
+                    referer: context.pageUrl,
+                    origin: context.baseOrigin,
+                },
+                useHeaderGenerator: false,
+                http2: false,
+                throwHttpErrors: false,
+                timeout: { request: REQUEST_TIMEOUT_MS },
+            });
 
-    const eventCollections = [];
-    if (pageData.events && typeof pageData.events === 'object') {
-        for (const [eventType, eventGroup] of Object.entries(pageData.events)) {
-            if (eventGroup && Array.isArray(eventGroup.items) && eventGroup.items.length) {
-                eventCollections.push({ eventType, items: eventGroup.items });
+            const contentType = String(response.headers['content-type'] || '');
+            const body = String(response.body || '');
+
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                throw new Error(`HTTP ${response.statusCode}`);
+            }
+
+            if (
+                !contentType.includes('json') ||
+                /<title>Just a moment|cf-chl-|Enable JavaScript and cookies/i.test(body)
+            ) {
+                throw new Error('The response was not a usable JSON catalog.');
+            }
+
+            const data = JSON.parse(body);
+            if (!Array.isArray(data?.subcategories)) {
+                const keys = Object.keys(data || {}).join(', ') || 'none';
+                throw new Error(`The JSON response has no subcategories array. Keys: ${keys}`);
+            }
+
+            log.info(`Fetched city catalog | city=${context.cityId} | subcategories=${data.subcategories.length}`);
+            return data;
+        } catch (error) {
+            lastError = error;
+            if (attempt < API_MAX_ATTEMPTS - 1) {
+                log.warning(`Catalog request attempt ${attempt + 1}/${API_MAX_ATTEMPTS} failed: ${error.message}`);
             }
         }
     }
 
-    for (const collection of eventCollections) {
-        entries.push({
-            value: collection.items,
-            context: {
-                ...baseContext,
-                section: `events_${collection.eventType}`,
-                collectionTitle: collection.eventType,
-                collectionUrl: pageUrl,
-            },
-        });
+    throw new Error(
+        `Unable to fetch the Hellotickets JSON catalog after ${API_MAX_ATTEMPTS} attempts: ${lastError?.message || 'unknown error'}`,
+    );
+}
+
+function extractRecords(apiData, context) {
+    const recordsByKey = new Map();
+    let duplicatesRemoved = 0;
+
+    for (const subcategory of apiData.subcategories) {
+        const collectionContext = {
+            ...context,
+            collectionId: subcategory.id,
+            collectionTitle: subcategory.name,
+            collectionUrl: toAbsoluteUrl(subcategory.url, context.baseOrigin),
+            collectionDescription: subcategory.searchDescription,
+        };
+
+        duplicatesRemoved += walkApiValue(subcategory.aliases, collectionContext, recordsByKey);
+        duplicatesRemoved += walkApiValue(subcategory.subCategories, collectionContext, recordsByKey);
     }
 
-    return entries;
+    const records = Array.from(recordsByKey.values());
+    records.duplicatesRemoved = duplicatesRemoved;
+    return records;
 }
 
-function extractCollectionItems(value) {
-    if (Array.isArray(value)) return value;
-    if (value && Array.isArray(value.items)) return value.items;
-    if (value && Array.isArray(value.subcategories)) return value.subcategories;
-    return [];
-}
-
-function collectCollectionUrlsFromEntries(entries, baseOrigin) {
-    const urls = new Set();
-
-    for (const entry of entries) {
-        collectCollectionUrls(entry?.value, baseOrigin, urls);
-    }
-
-    return urls;
-}
-
-function collectCollectionUrls(value, baseOrigin, urls, depth = 0) {
-    if (value == null || depth > 8) return;
+function walkApiValue(value, context, recordsByKey, depth = 0) {
+    if (value == null || depth > 10) return 0;
 
     if (Array.isArray(value)) {
-        for (const item of value) {
-            collectCollectionUrls(item, baseOrigin, urls, depth + 1);
-        }
-        return;
+        return value.reduce(
+            (duplicateCount, item) => duplicateCount + walkApiValue(item, context, recordsByKey, depth + 1),
+            0,
+        );
     }
 
-    if (typeof value !== 'object') return;
+    if (typeof value !== 'object') return 0;
 
-    const normalizedUrl = normalizeCollectionUrl(value.url, baseOrigin);
-    if (normalizedUrl) urls.add(normalizedUrl);
+    let duplicateCount = 0;
 
-    if (Array.isArray(value.aliases)) {
-        for (const alias of value.aliases) {
-            collectCollectionUrls(alias, baseOrigin, urls, depth + 1);
-        }
-    }
-
-    if (Array.isArray(value.items)) {
-        for (const item of value.items) {
-            collectCollectionUrls(item, baseOrigin, urls, depth + 1);
-        }
-    }
-
-    if (Array.isArray(value.subcategories)) {
-        for (const subcategory of value.subcategories) {
-            collectCollectionUrls(subcategory, baseOrigin, urls, depth + 1);
-        }
-    }
-}
-
-function enqueueCollectionUrls(urls, { queue, queuedUrls, visitedUrls, baseOrigin, maxQueueSize }) {
-    for (const candidateUrl of urls) {
-        const normalizedUrl = normalizeCollectionUrl(candidateUrl, baseOrigin);
-        if (!normalizedUrl) continue;
-        if (visitedUrls.has(normalizedUrl) || queuedUrls.has(normalizedUrl)) continue;
-        if (queue.length >= maxQueueSize) break;
-
-        queue.push(normalizedUrl);
-        queuedUrls.add(normalizedUrl);
-    }
-}
-
-function collectProductRecords(value, context, baseOrigin, recordsById, depth = 0) {
-    if (depth > 8 || value == null) return;
-
-    if (Array.isArray(value)) {
-        for (const item of value) {
-            collectProductRecords(item, context, baseOrigin, recordsById, depth + 1);
-        }
-        return;
-    }
-
-    if (typeof value !== 'object') return;
-
-    const normalized = normalizeProductRecord(value, context, baseOrigin);
+    const normalized = normalizeProductRecord(value, context);
     if (normalized) {
-        const recordKey = String(normalized.alias_id || normalized.id || normalized.product_url);
-        const existing = recordsById.get(recordKey);
-        recordsById.set(recordKey, existing ? mergeRecords(existing, normalized) : normalized);
-    }
-
-    if (Array.isArray(value.aliases) && value.aliases.length) {
-        const aliasContext = {
-            ...context,
-            collectionId: value.id,
-            collectionTitle: value.name || value.title || context.collectionTitle,
-            collectionUrl: toAbsoluteUrl(value.url, baseOrigin) || context.collectionUrl,
-            collectionDescription: value.searchDescription || context.collectionDescription,
-        };
-
-        for (const alias of value.aliases) {
-            collectProductRecords(alias, aliasContext, baseOrigin, recordsById, depth + 1);
+        const key = String(normalized.alias_id || normalized.id || normalized.product_url);
+        const existing = recordsByKey.get(key);
+        if (existing) {
+            recordsByKey.set(key, mergeRecords(existing, normalized));
+            duplicateCount += 1;
+        } else {
+            recordsByKey.set(key, normalized);
         }
     }
 
-    if (Array.isArray(value.items) && value.items.length) {
-        const itemsContext = {
-            ...context,
-            collectionId: value.id || context.collectionId,
-            collectionTitle: value.name || value.title || context.collectionTitle,
-            collectionUrl: toAbsoluteUrl(value.url, baseOrigin) || context.collectionUrl,
-            collectionDescription: value.searchDescription || context.collectionDescription,
-        };
-
-        for (const item of value.items) {
-            collectProductRecords(item, itemsContext, baseOrigin, recordsById, depth + 1);
+    for (const childKey of ['aliases', 'subCategories', 'subcategories']) {
+        if (Array.isArray(value[childKey])) {
+            duplicateCount += walkApiValue(
+                value[childKey],
+                {
+                    ...context,
+                    collectionId: value.id || context.collectionId,
+                    collectionTitle: value.name || value.title || context.collectionTitle,
+                    collectionUrl: toAbsoluteUrl(value.url, context.baseOrigin) || context.collectionUrl,
+                    collectionDescription: value.searchDescription || context.collectionDescription,
+                },
+                recordsByKey,
+                depth + 1,
+            );
         }
     }
+
+    return duplicateCount;
 }
 
-function normalizeProductRecord(candidate, context, baseOrigin) {
-    const hasListingUrl = typeof candidate.url === 'string' && candidate.url.includes('/a/pa-');
-    const isProductLike = Boolean(candidate.isProductOrAlias || candidate.aliasId || hasListingUrl);
-    if (!isProductLike) return null;
+function normalizeProductRecord(candidate, context) {
+    const isProductLike = Boolean(candidate.isProductOrAlias || candidate.aliasId || candidate.url?.includes('/a/pa-'));
+    if (!isProductLike || !candidate.url) return null;
 
     return pruneEmptyValues({
         id: candidate.id,
@@ -382,37 +222,89 @@ function normalizeProductRecord(candidate, context, baseOrigin) {
         code: candidate.code,
         title: candidate.title,
         origin_title: candidate.originTitle,
-        short_description: htmlToText(candidate.shortDescription),
+        short_description: stripHtml(candidate.shortDescription),
         price: candidate.price,
         price_eur: candidate.priceInEUR,
         currency_code: candidate.currencyCode,
         rating: candidate.rating,
         review_count: candidate.reviewCount,
-        image_url: toAbsoluteUrl(candidate.thumbnailHiResUrl || candidate.thumbnailUrl, baseOrigin),
-        product_url: toAbsoluteUrl(candidate.url, baseOrigin),
+        image_url: toAbsoluteUrl(candidate.thumbnailHiResUrl || candidate.thumbnailUrl, context.baseOrigin),
+        thumbnail_url: toAbsoluteUrl(candidate.thumbnailUrl, context.baseOrigin),
+        product_url: toAbsoluteUrl(candidate.url, context.baseOrigin),
         duration: candidate.duration,
         offered_languages: normalizeLanguages(candidate.offeredLangs),
+        fee_total_i18n: candidate.feeTotalI18N,
+        fee_percentage: candidate.feePercentage,
         merchant_cancellable: candidate.merchantCancellable,
         cancellation_type: candidate.cancellationType,
+        is_product_or_alias: candidate.isProductOrAlias,
+        is_grouped_tour: candidate.isGroupedTour,
         skip_line: candidate.skipLine,
         smartphone_ticket: candidate.smartphoneTicket,
         wheelchair_access: candidate.wheelchairAccess,
         instant_ticket_delivery: candidate.instantTicketDelivery,
         is_open: candidate.isOpen,
         is_free_product: candidate.isFreeProduct,
-        is_grouped_tour: candidate.isGroupedTour,
         service: candidate.service,
-        source_section: context.section,
-        source_sections: [context.section],
+        custom_settings: candidate.customSettings,
+        slug_exists: candidate.slugExists,
+        sub_categories: candidate.subCategories,
+        system_groups: candidate.systemGroups,
+        source_section: 'top_subcategories_api',
+        source_sections: ['top_subcategories_api'],
         source_collection_id: context.collectionId,
         source_collection_title: context.collectionTitle,
         source_collection_url: context.collectionUrl,
-        source_collection_description: context.collectionDescription,
+        source_collection_description: stripHtml(context.collectionDescription),
         city_id: context.cityId,
+        city_slug: context.citySlug,
         locale: context.locale,
         page_url: context.pageUrl,
         page_title: context.pageTitle,
     });
+}
+
+function matchesKeyword(record, filterKeyword) {
+    const terms = tokenize(filterKeyword);
+    if (terms.length === 0) return true;
+
+    const haystack = tokenize(
+        [record.title, record.origin_title, record.short_description, record.service, record.source_collection_title]
+            .filter(Boolean)
+            .join(' '),
+    ).join(' ');
+
+    return terms.every((term) => haystack.includes(term));
+}
+
+function matchesLocation(record, filterLocation) {
+    const terms = tokenize(filterLocation);
+    if (terms.length === 0) return true;
+
+    const haystack = tokenize(
+        [
+            record.city_slug,
+            record.locale,
+            record.page_url,
+            record.page_title,
+            record.product_url,
+            record.source_collection_title,
+        ]
+            .filter(Boolean)
+            .join(' '),
+    ).join(' ');
+
+    return terms.every((term) => haystack.includes(term));
+}
+
+function tokenize(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[-_/]+/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
 }
 
 function mergeRecords(existing, incoming) {
@@ -427,31 +319,31 @@ function mergeRecords(existing, incoming) {
             continue;
         }
 
-        if (merged[key] == null || merged[key] === '') {
-            merged[key] = value;
-        }
+        if (merged[key] == null || merged[key] === '') merged[key] = value;
     }
 
     return pruneEmptyValues(merged);
 }
 
 function normalizeLanguages(offeredLangs) {
-    if (!Array.isArray(offeredLangs) || offeredLangs.length === 0) return undefined;
+    if (!Array.isArray(offeredLangs)) return undefined;
 
     const languages = offeredLangs
-        .flatMap((entry) => Object.values(entry || {}))
+        .flatMap((entry) => (typeof entry === 'object' ? Object.values(entry || {}) : entry))
         .map((value) => String(value).trim())
         .filter(Boolean);
 
     return languages.length ? [...new Set(languages)] : undefined;
 }
 
-function htmlToText(value) {
+function stripHtml(value) {
     if (!value) return undefined;
-
-    const $ = cheerioLoad(`<div>${value}</div>`);
-    const text = $.text().replace(/\s+/g, ' ').trim();
-    return text || undefined;
+    return (
+        String(value)
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim() || undefined
+    );
 }
 
 function toAbsoluteUrl(value, baseOrigin) {
@@ -464,28 +356,15 @@ function toAbsoluteUrl(value, baseOrigin) {
     }
 }
 
-function normalizeCollectionUrl(value, baseOrigin) {
-    const absoluteUrl = toAbsoluteUrl(value, baseOrigin);
-    if (!absoluteUrl) return undefined;
-
-    try {
-        const parsedUrl = new URL(absoluteUrl);
-        if (parsedUrl.origin !== baseOrigin) return undefined;
-        if (parsedUrl.pathname.startsWith('/api/')) return undefined;
-        if (parsedUrl.pathname.includes('/a/pa-')) return undefined;
-
-        parsedUrl.hash = '';
-        return parsedUrl.href;
-    } catch {
-        return undefined;
-    }
+function formatSlug(value) {
+    return String(value || '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function pruneEmptyValues(value) {
     if (Array.isArray(value)) {
-        const cleanedArray = value
-            .map((item) => pruneEmptyValues(item))
-            .filter((item) => item !== undefined);
+        const cleanedArray = value.map((item) => pruneEmptyValues(item)).filter((item) => item !== undefined);
         return cleanedArray.length ? cleanedArray : undefined;
     }
 

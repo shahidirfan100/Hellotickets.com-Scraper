@@ -1,13 +1,13 @@
 ## What does Hellotickets Listings Scraper do?
 
-Hellotickets Listings Scraper collects structured tours, attraction tickets, city passes, and other travel experiences from public Hellotickets city and category pages. Provide one Hellotickets listing URL and choose the maximum number of records to save. The result is a clean dataset with titles, prices, currencies, ratings, review counts, durations, ticket features, provider information, and source context.
+Hellotickets Listings Scraper collects structured tours, attraction tickets, city passes, and other travel experiences from public Hellotickets city and category pages. Provide one Hellotickets listing URL, optionally filter by keyword or location, and choose the maximum number of records to save. The result is a clean dataset with titles, prices, currencies, ratings, review counts, durations, ticket features, provider information, and source context.
 
 Use the dataset for travel market research, destination catalog building, experience comparison, price tracking, content planning, and recurring checks of public listings. The Actor also discovers related collections from the selected page, which helps find more unique experiences than the first visible group of listings alone.
 
 ## Why use Hellotickets Listings Scraper?
 
 - **Destination research** - Compare the tours and attraction tickets available in New York, London, and other Hellotickets destinations.
-- **Structured travel data** - Receive consistent fields for listing identity, pricing, reviews, duration, languages, ticket options, and accessibility.
+- **Structured travel data** - Receive consistent fields for listing identity, pricing, reviews, duration, languages, ticket options, fees, and accessibility.
 - **Catalog monitoring** - Repeat runs to identify new listings, changed prices, updated ratings, or shifts in the experiences shown for a destination.
 - **Clean results** - Repeated appearances of the same experience are combined, and empty values are left out of saved records.
 - **Flexible collection size** - Use a small target for a quick check or a larger target for destination-level research.
@@ -17,61 +17,73 @@ Use the dataset for travel market research, destination catalog building, experi
 
 Each dataset item represents one unique Hellotickets experience. The exact fields depend on the information published for that listing.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | Integer | Internal listing identifier when available. |
-| `alias_id` | Integer | Stable experience alias identifier when available. |
-| `code` | String | Listing or supplier code. |
-| `title` | String | Experience or ticket title. |
-| `origin_title` | String | Original title supplied by the source. |
-| `short_description` | String | Short plain-text description. |
-| `price` | Number | Displayed price for the listing. |
-| `price_eur` | Number | Euro-converted price when available. |
-| `currency_code` | String | Currency code associated with `price`. |
-| `rating` | Number | Average customer rating. |
-| `review_count` | Integer | Number of reviews. |
-| `image_url` | String | Main image URL for the listing. |
-| `product_url` | String | Direct Hellotickets experience URL. |
-| `duration` | String | Duration shown for the experience. |
-| `offered_languages` | Array | Languages offered for the experience. |
-| `merchant_cancellable` | Boolean | Whether the merchant marks the listing as cancellable. |
-| `cancellation_type` | Integer | Cancellation type code when available. |
-| `skip_line` | Boolean | Whether skip-the-line access is indicated. |
-| `smartphone_ticket` | Boolean | Whether a smartphone ticket is supported. |
-| `wheelchair_access` | Boolean | Whether wheelchair access is indicated. |
-| `instant_ticket_delivery` | Boolean | Whether instant ticket delivery is indicated. |
-| `is_open` | Boolean | Availability or open-status indicator. |
-| `is_free_product` | Boolean | Whether the listing is marked as free. |
-| `is_grouped_tour` | Boolean | Whether the listing is marked as a group tour. |
-| `service` | String | Provider or service label. |
-| `source_section` | String | Main page section where the listing was found. |
-| `source_sections` | Array | All page sections where the listing appeared. |
-| `source_collection_id` | Integer | Parent collection identifier when available. |
-| `source_collection_title` | String | Parent collection title. |
-| `source_collection_url` | String | Parent collection URL. |
-| `source_collection_description` | String | Parent collection description. |
-| `city_id` | String | Hellotickets city identifier. |
-| `locale` | String | Locale inferred from the submitted URL. |
-| `page_url` | String | Page used to start the collection. |
-| `page_title` | String | Title of the source page. |
+| Field                           | Type    | Description                                             |
+| ------------------------------- | ------- | ------------------------------------------------------- |
+| `id`                            | Integer | Internal listing identifier when available.             |
+| `alias_id`                      | Integer | Stable experience alias identifier when available.      |
+| `code`                          | String  | Listing or supplier code.                               |
+| `title`                         | String  | Experience or ticket title.                             |
+| `origin_title`                  | String  | Original title supplied by the source.                  |
+| `short_description`             | String  | Short plain-text description.                           |
+| `price`                         | Number  | Displayed price for the listing.                        |
+| `price_eur`                     | Number  | Euro-converted price when available.                    |
+| `currency_code`                 | String  | Currency code associated with `price`.                  |
+| `rating`                        | Number  | Average customer rating.                                |
+| `review_count`                  | Integer | Number of reviews.                                      |
+| `image_url`                     | String  | Main image URL for the listing.                         |
+| `thumbnail_url`                 | String  | Secondary thumbnail URL when available.                 |
+| `product_url`                   | String  | Direct Hellotickets experience URL.                     |
+| `duration`                      | String  | Duration shown for the experience.                      |
+| `offered_languages`             | Array   | Languages offered for the experience.                   |
+| `fee_total_i18n`                | Number  | Total displayed fee amount when available.              |
+| `fee_percentage`                | Number  | Fee percentage when available.                          |
+| `merchant_cancellable`          | Boolean | Whether the merchant marks the listing as cancellable.  |
+| `cancellation_type`             | Integer | Cancellation type code when available.                  |
+| `is_product_or_alias`           | Boolean | Whether the source marks the record as a product alias. |
+| `skip_line`                     | Boolean | Whether skip-the-line access is indicated.              |
+| `smartphone_ticket`             | Boolean | Whether a smartphone ticket is supported.               |
+| `wheelchair_access`             | Boolean | Whether wheelchair access is indicated.                 |
+| `instant_ticket_delivery`       | Boolean | Whether instant ticket delivery is indicated.           |
+| `is_open`                       | Boolean | Availability or open-status indicator.                  |
+| `is_free_product`               | Boolean | Whether the listing is marked as free.                  |
+| `is_grouped_tour`               | Boolean | Whether the listing is marked as a group tour.          |
+| `service`                       | String  | Provider or service label.                              |
+| `custom_settings`               | Object  | Public listing settings when available.                 |
+| `slug_exists`                   | Object  | Available locale slugs when provided by the source.     |
+| `sub_categories`                | Array   | Nested subcategory values when available.               |
+| `system_groups`                 | Array   | Source group labels when available.                     |
+| `source_section`                | String  | Main page section where the listing was found.          |
+| `source_sections`               | Array   | All page sections where the listing appeared.           |
+| `source_collection_id`          | Integer | Parent collection identifier when available.            |
+| `source_collection_title`       | String  | Parent collection title.                                |
+| `source_collection_url`         | String  | Parent collection URL.                                  |
+| `source_collection_description` | String  | Parent collection description.                          |
+| `city_id`                       | String  | Hellotickets city identifier.                           |
+| `city_slug`                     | String  | City slug from the submitted URL.                       |
+| `locale`                        | String  | Locale inferred from the submitted URL.                 |
+| `page_url`                      | String  | Page used to start the collection.                      |
+| `page_title`                    | String  | Title of the source page.                               |
 
 ## How to use Hellotickets Listings Scraper
 
 1. Open a public Hellotickets city or category page that contains the experiences you want to collect.
 2. Copy the complete page URL.
 3. Open this Actor in Apify and paste the URL into `startUrl`.
-4. Set `results_wanted` to the maximum number of unique listings you want.
-5. Run the Actor and review the dataset preview.
-6. Download the results or connect the dataset to your research, reporting, or automation workflow.
+4. Optionally enter a `keyword` or `location` filter.
+5. Set `results_wanted` to the maximum number of unique listings you want.
+6. Run the Actor and review the dataset preview.
+7. Download the results or connect the dataset to your research, reporting, or automation workflow.
 
 ## Input Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `startUrl` | String | No | `https://www.hellotickets.com/us/new-york/c-1?qs=New%20York` | Public Hellotickets city or category page URL to start from. |
-| `results_wanted` | Integer | No | `20` | Maximum number of unique tour, ticket, pass, or experience listings to save. Minimum value is `1`. |
+| Parameter        | Type    | Required | Default                                                      | Description                                                                                        |
+| ---------------- | ------- | -------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `startUrl`       | String  | No       | `https://www.hellotickets.com/us/new-york/c-1?qs=New%20York` | Public Hellotickets city or category page URL to start from.                                       |
+| `keyword`        | String  | No       | Empty                                                        | Optional terms matched against listing titles, descriptions, providers, and collection names.      |
+| `location`       | String  | No       | Empty                                                        | Optional location terms matched against the URL, city, locale, page, and collection context.       |
+| `results_wanted` | Integer | No       | `20`                                                         | Maximum number of unique tour, ticket, pass, or experience listings to save. Minimum value is `1`. |
 
-The Actor accepts one `startUrl` per run. To collect several destinations, create separate runs or schedules with a different URL for each destination.
+The Actor accepts one `startUrl` per run. The city is selected from the `/c-<cityId>` segment in that URL. To collect several destinations, create separate runs or schedules with a different URL for each destination.
 
 ## Output Data
 
@@ -85,19 +97,32 @@ Collect up to 20 unique listings from a New York city page.
 
 ```json
 {
-  "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
-  "results_wanted": 20
+    "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
+    "results_wanted": 20
 }
 ```
 
 ### Keyword-Focused Collection
 
-Use the Hellotickets query string to collect listings surfaced for a specific interest, such as Broadway experiences.
+Use `keyword` to keep listings related to a specific interest, such as Broadway experiences.
 
 ```json
 {
-  "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=Broadway",
-  "results_wanted": 50
+    "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=Broadway",
+    "keyword": "Broadway",
+    "results_wanted": 50
+}
+```
+
+### Location-Focused Collection
+
+Use `location` to keep records matching the destination context in the submitted URL.
+
+```json
+{
+    "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
+    "location": "New York",
+    "results_wanted": 50
 }
 ```
 
@@ -107,8 +132,8 @@ Increase the result target when you are building a broader destination catalog.
 
 ```json
 {
-  "startUrl": "https://www.hellotickets.com/united-kingdom/london/c-2?qs=London",
-  "results_wanted": 200
+    "startUrl": "https://www.hellotickets.com/united-kingdom/london/c-2?qs=London",
+    "results_wanted": 200
 }
 ```
 
@@ -118,37 +143,50 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 
 ```json
 {
-  "id": 60277,
-  "alias_id": 10544,
-  "code": "1092570",
-  "title": "New York The Edge Skip the Line Tickets",
-  "origin_title": "Edge NYC: Express Pass",
-  "short_description": "Get fast-track access to The Edge Observatory in New York and enjoy panoramic views from Hudson Yards.",
-  "price": 99,
-  "price_eur": 86,
-  "currency_code": "USD",
-  "rating": 4.7,
-  "review_count": 1328,
-  "image_url": "https://aws-tiqets-cdn.imgix.net/images/content/61fc54cd909249899d6378ca5eb3db51.jpeg",
-  "product_url": "https://www.hellotickets.com/us/new-york/edge-skip-the-line-tickets/a/pa-10544",
-  "duration": "Flexible entry",
-  "offered_languages": ["English"],
-  "merchant_cancellable": true,
-  "cancellation_type": 1,
-  "skip_line": false,
-  "smartphone_ticket": true,
-  "wheelchair_access": true,
-  "instant_ticket_delivery": true,
-  "is_open": true,
-  "is_grouped_tour": false,
-  "service": "tiqets",
-  "source_section": "top_subcategories_api",
-  "source_sections": ["search_items", "top_subcategories_api"],
-  "source_collection_title": "Edge NYC Tickets and Tours",
-  "city_id": "1",
-  "locale": "us",
-  "page_url": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
-  "page_title": "Tickets and tours in New York"
+    "id": 115707,
+    "alias_id": 10,
+    "code": "2198305",
+    "title": "Go City: New York City Explorer Pass - Choose 2, 3, 4, 5, 6, 7 or 10 attractions",
+    "origin_title": "Go City: New York City Explorer Pass - Choose 2, 3, 4, 5, 6, 7 or 10 attractions",
+    "short_description": "The Go City: New York City Explorer Pass is a sightseeing pass that gets you into top attractions for less than buying tickets one by one.",
+    "price": 85,
+    "price_eur": 63,
+    "currency_code": "USD",
+    "rating": 4.6,
+    "review_count": 10908,
+    "image_url": "https://res.cloudinary.com/hello-tickets/image/upload/v1755185121/se0f3bejhcoflf65iqas.jpg",
+    "thumbnail_url": "https://res.cloudinary.com/hello-tickets/image/upload/v1755185121/se0f3bejhcoflf65iqas.jpg",
+    "product_url": "https://www.hellotickets.com/us/new-york/new-york-city-explorer-pass/a/pa-10",
+    "fee_total_i18n": 13,
+    "fee_percentage": 17,
+    "merchant_cancellable": true,
+    "cancellation_type": 3,
+    "is_product_or_alias": true,
+    "skip_line": false,
+    "smartphone_ticket": false,
+    "wheelchair_access": false,
+    "instant_ticket_delivery": false,
+    "is_open": false,
+    "is_free_product": false,
+    "is_grouped_tour": false,
+    "service": "gk",
+    "custom_settings": {
+        "disableDiscountOnFrontend": true
+    },
+    "slug_exists": {
+        "en": true,
+        "en_US": true
+    },
+    "source_section": "top_subcategories_api",
+    "source_sections": ["top_subcategories_api"],
+    "source_collection_id": 1466,
+    "source_collection_title": "New York Tourist Cards",
+    "source_collection_url": "https://www.hellotickets.com/us/new-york/new-york-pass-and-other-passes/sc-1-1466",
+    "city_id": "1",
+    "city_slug": "new-york",
+    "locale": "us",
+    "page_url": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
+    "page_title": "New York"
 }
 ```
 
@@ -159,6 +197,7 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 - **Test with a small target** - Start with `results_wanted: 20` and inspect the dataset before requesting a larger collection.
 - **Match the target to the destination** - Smaller destinations may contain fewer unique experiences than major travel markets.
 - **Use query variations carefully** - Different `qs` values can surface different experiences, but similar queries may return overlapping listings.
+- **Filter after choosing the city** - `location` narrows the selected city context; use a different `startUrl` when you need another city.
 - **Schedule destination checks** - Recurring runs are useful for tracking changes in prices, ratings, review counts, and visible inventory.
 
 ## Integrations and export formats
@@ -167,14 +206,14 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 - **Airtable** - Build a searchable experience catalog with views for cities, providers, or ticket features.
 - **Make and Zapier** - Start follow-up actions after a run completes.
 - **Webhooks** - Send completed run notifications or dataset information to another application.
-- **API access** - Retrieve run and dataset data from your own applications through Apify.
+- **Programmatic workflows** - Retrieve run and dataset data from your own applications through Apify.
 
-| Format | Useful for |
-|--------|------------|
-| JSON | APIs, data processing, and application workflows |
-| CSV | Spreadsheet analysis and quick review |
-| Excel | Reporting and business analysis |
-| XML | Systems that require XML exports |
+| Format | Useful for                                |
+| ------ | ----------------------------------------- |
+| JSON   | Data processing and application workflows |
+| CSV    | Spreadsheet analysis and quick review     |
+| Excel  | Reporting and business analysis           |
+| XML    | Systems that require XML exports          |
 
 ## Frequently Asked Questions
 
@@ -184,7 +223,11 @@ Yes. Use a public Hellotickets city or category page as `startUrl`. The availabl
 
 ### Can I search with a keyword?
 
-Yes. When Hellotickets supports a query in the page URL, include the `qs` value in `startUrl`, such as `?qs=Broadway` or `?qs=New%20York`.
+Yes. Enter a value in `keyword` to match listing titles, original titles, descriptions, providers, and collection names. You can also preserve a Hellotickets `qs` value in `startUrl`.
+
+### Can I filter by location?
+
+Yes. Enter a city or locale in `location`. The filter checks the submitted page and listing context; use `startUrl` to select the city catalog.
 
 ### Why did the Actor return fewer records than `results_wanted`?
 

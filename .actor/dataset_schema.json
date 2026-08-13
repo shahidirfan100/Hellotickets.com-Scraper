@@ -1,68 +1,83 @@
 {
-  "actorSpecification": 1,
-  "title": "Hellotickets dataset",
-  "views": {
-    "overview": {
-      "title": "Overview",
-      "transformation": {
-        "fields": [
-          "title",
-          "product_url",
-          "price",
-          "currency_code",
-          "rating",
-          "review_count",
-          "duration",
-          "service",
-          "source_section",
-          "image_url"
-        ]
-      },
-      "display": {
-        "component": "table",
-        "properties": {
-          "title": {
-            "label": "Title",
-            "format": "text"
-          },
-          "product_url": {
-            "label": "URL",
-            "format": "link"
-          },
-          "price": {
-            "label": "Price",
-            "format": "number"
-          },
-          "currency_code": {
-            "label": "Currency",
-            "format": "text"
-          },
-          "rating": {
-            "label": "Rating",
-            "format": "number"
-          },
-          "review_count": {
-            "label": "Reviews",
-            "format": "number"
-          },
-          "duration": {
-            "label": "Duration",
-            "format": "text"
-          },
-          "service": {
-            "label": "Service",
-            "format": "text"
-          },
-          "source_section": {
-            "label": "Section",
-            "format": "text"
-          },
-          "image_url": {
-            "label": "Image",
-            "format": "image"
-          }
+    "actorSpecification": 1,
+    "title": "Hellotickets dataset",
+    "views": {
+        "overview": {
+            "title": "Overview",
+            "transformation": {
+                "fields": [
+                    "title",
+                    "product_url",
+                    "price",
+                    "currency_code",
+                    "rating",
+                    "review_count",
+                    "duration",
+                    "fee_total_i18n",
+                    "fee_percentage",
+                    "service",
+                    "city_slug",
+                    "source_section",
+                    "image_url"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "title": {
+                        "label": "Title",
+                        "format": "text"
+                    },
+                    "product_url": {
+                        "label": "URL",
+                        "format": "link"
+                    },
+                    "price": {
+                        "label": "Price",
+                        "format": "number"
+                    },
+                    "currency_code": {
+                        "label": "Currency",
+                        "format": "text"
+                    },
+                    "rating": {
+                        "label": "Rating",
+                        "format": "number"
+                    },
+                    "review_count": {
+                        "label": "Reviews",
+                        "format": "number"
+                    },
+                    "duration": {
+                        "label": "Duration",
+                        "format": "text"
+                    },
+                    "fee_total_i18n": {
+                        "label": "Fee",
+                        "format": "number"
+                    },
+                    "fee_percentage": {
+                        "label": "Fee %",
+                        "format": "number"
+                    },
+                    "service": {
+                        "label": "Service",
+                        "format": "text"
+                    },
+                    "city_slug": {
+                        "label": "City",
+                        "format": "text"
+                    },
+                    "source_section": {
+                        "label": "Section",
+                        "format": "text"
+                    },
+                    "image_url": {
+                        "label": "Image",
+                        "format": "image"
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
