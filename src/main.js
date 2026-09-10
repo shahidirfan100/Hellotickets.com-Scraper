@@ -1,41 +1,40 @@
+import vm from 'node:vm';
+
 import { Actor, log } from 'apify';
-import { gotScraping } from 'got-scraping';
+import { Impit } from 'impit';
 
 const PREFILLED_START_URL = 'https://www.hellotickets.com/us/new-york/c-1?qs=New%20York';
-const CITIES_API_URL = 'https://www.hellotickets.com/api/cities';
-const API_PAGE_SIZE = 12;
 const API_MAX_ATTEMPTS = 3;
-const REQUEST_TIMEOUT_MS = 30000;
-const CITY_DIRECTORY_PAGE_SIZE = 50;
-const BROAD_SEARCH_CONCURRENCY = 4;
-const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0',
-];
 
 await Actor.init();
 
 const input = (await Actor.getInput()) || {};
-const { startUrl = '', keyword = '', location = '', results_wanted: rawResultsWanted = 20 } = input;
+const { startUrl = '', location = '', results_wanted: rawResultsWanted = 20 } = input;
+const proxyInput = input.proxyConfiguration || {};
+const hasCustomProxyUrls = Array.isArray(proxyInput.proxyUrls) && proxyInput.proxyUrls.length > 0;
+const shouldUseProxy = Boolean(proxyInput.useApifyProxy || hasCustomProxyUrls);
+const proxyConfiguration = shouldUseProxy && (Actor.isAtHome() || hasCustomProxyUrls)
+    ? await Actor.createProxyConfiguration(proxyInput)
+    : null;
+const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
+const httpClient = new Impit({
+    browser: 'chrome',
+    ignoreTlsErrors: true,
+    ...(proxyUrl && { proxyUrl }),
+});
+
+if (shouldUseProxy && !proxyConfiguration) {
+    log.info('Proxy requested locally without a usable Apify proxy context; continuing without a proxy.');
+}
 
 const resultsWanted = normalizePositiveInteger(rawResultsWanted, 20);
-const hasKeyword = hasValue(keyword);
-const hasLocation = hasValue(location);
-const hasNonPrefilledUrl = hasValue(startUrl) && !isPrefilledStartUrl(startUrl);
-const useBroadSearch = hasKeyword || hasLocation;
-const targetUrl = hasNonPrefilledUrl || !useBroadSearch
-    ? normalizeHttpUrl(startUrl || PREFILLED_START_URL)
-    : null;
+const targetUrl = normalizeHttpUrl(startUrl || PREFILLED_START_URL);
 
 try {
-    const items = targetUrl
-        ? await searchSingleCatalog(targetUrl, keyword, location, resultsWanted)
-        : await searchBroadCatalog(keyword, location, resultsWanted);
+    const items = await searchUrl(targetUrl, location, resultsWanted);
 
     if (items.length === 0) {
-        throw new Error(
-            'The Hellotickets catalog returned no matching listings. Check the URL, keyword, or location filter.',
-        );
+        throw new Error('The Hellotickets URL returned no matching listings. Check the URL or location filter.');
     }
 
     await Actor.pushData(items);
@@ -44,160 +43,54 @@ try {
     await Actor.exit();
 }
 
-async function searchSingleCatalog(targetUrlValue, filterKeyword, filterLocation, limit) {
+async function searchUrl(targetUrlValue, filterLocation, limit) {
     const targetContext = parseTargetContext(targetUrlValue);
     log.info(`Start run | mode=url | target=${targetUrlValue} | results=${limit}`);
 
-    const apiData = await fetchCityCatalog(targetContext);
-    const records = extractRecords(apiData, targetContext);
-    const filteredRecords = records
-        .filter((record) => matchesKeyword(record, filterKeyword))
-        .filter((record) => matchesLocation(record, filterLocation));
+    const records = await fetchPageRecords(targetContext);
+    const filteredRecords = records.filter((record) => matchesLocation(record, filterLocation));
 
-    log.info(`Catalog records=${records.length} | after_filters=${filteredRecords.length}`);
+    log.info(`Page records=${records.length} | after_location_filter=${filteredRecords.length}`);
     return filteredRecords.slice(0, limit);
 }
 
-async function searchBroadCatalog(filterKeyword, filterLocation, limit) {
-    log.info(
-        `Start run | mode=broad | keyword=${String(filterKeyword || 'none')} | location=${String(
-            filterLocation || 'worldwide',
-        )} | results=${limit}`,
-    );
-
-    const firstPage = await fetchCitiesPage(1);
-    const totalPages = Math.ceil(
-        (firstPage.pagination?.total || firstPage.cities.length) /
-            (firstPage.pagination?.pageSize || CITY_DIRECTORY_PAGE_SIZE),
-    );
-    const locationTerms = tokenize(filterLocation);
-    const recordsByKey = new Map();
-    let catalogsProcessed = 0;
-    let duplicatesRemoved = 0;
-    let citiesAvailable = 0;
-    let citiesSelected = 0;
-
-    for (let page = 1; page <= totalPages && recordsByKey.size < limit; page += 1) {
-        const directoryPage = page === 1 ? firstPage : await fetchCitiesPage(page);
-        const cities = (directoryPage.cities || []).filter((city) => city.status === 'active');
-        const matchingCities = locationTerms.length
-            ? cities.filter((city) => matchesCityLocation(city, locationTerms))
-            : cities;
-
-        citiesAvailable += cities.length;
-        citiesSelected += matchingCities.length;
-
-        for (
-            let index = 0;
-            index < matchingCities.length && recordsByKey.size < limit;
-            index += BROAD_SEARCH_CONCURRENCY
-        ) {
-            const cityBatch = matchingCities.slice(index, index + BROAD_SEARCH_CONCURRENCY);
-            const catalogResults = await Promise.allSettled(
-                cityBatch.map(async (city) => {
-                    const cityContext = parseTargetContext(buildCityPageUrl(city, filterKeyword));
-                    const apiData = await fetchCityCatalog(cityContext, { logResult: false });
-                    return { city, records: extractRecords(apiData, cityContext) };
-                }),
-            );
-
-            let skippedCatalogs = 0;
-            for (const result of catalogResults) {
-                catalogsProcessed += 1;
-                if (result.status === 'rejected') {
-                    skippedCatalogs += 1;
-                    continue;
-                }
-
-                for (const record of result.value.records) {
-                    if (!matchesKeyword(record, filterKeyword)) continue;
-                    const key = String(record.alias_id || record.id || record.product_url);
-                    const existing = recordsByKey.get(key);
-                    if (existing) {
-                        recordsByKey.set(key, mergeRecords(existing, record));
-                        duplicatesRemoved += 1;
-                    } else {
-                        recordsByKey.set(key, record);
-                    }
-                }
-            }
-
-            if (skippedCatalogs > 0) {
-                log.warning(`Broad catalog batch skipped=${skippedCatalogs}/${catalogResults.length}`);
-            }
-
-            log.info(
-                `Broad search progress | directory_page=${page}/${totalPages} | catalogs=${catalogsProcessed} | matches=${recordsByKey.size}`,
-            );
-        }
-    }
-
-    if (locationTerms.length && citiesSelected === 0) {
-        throw new Error(`No Hellotickets destinations matched location: ${filterLocation}`);
-    }
-
-    log.info(
-        `Broad search complete | catalogs=${catalogsProcessed} | cities_available=${citiesAvailable} | cities_selected=${citiesSelected} | matches=${recordsByKey.size} | duplicates_removed=${duplicatesRemoved}`,
-    );
-    return Array.from(recordsByKey.values()).slice(0, limit);
-}
-
-async function fetchCitiesPage(page) {
+async function fetchWithImpit(url, options = {}) {
     let lastError;
 
-    for (let attempt = 0; attempt < API_MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= API_MAX_ATTEMPTS; attempt += 1) {
         try {
-            const response = await gotScraping.get(`${CITIES_API_URL}?page=${page}`, {
-                headers: getRequestHeaders('https://www.hellotickets.com/'),
-                useHeaderGenerator: false,
-                http2: false,
-                throwHttpErrors: false,
-                timeout: { request: REQUEST_TIMEOUT_MS },
-            });
+            const response = await httpClient.fetch(url, options);
+            const body = await response.text();
 
-            const contentType = String(response.headers['content-type'] || '');
-            const body = String(response.body || '');
-            if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`HTTP ${response.statusCode}`);
-            if (!contentType.includes('json')) throw new Error('The destination directory response was not JSON.');
+            if (response.status >= 200 && response.status < 300) {
+                return {
+                    status: response.status,
+                    contentType: String(response.headers.get('content-type') || ''),
+                    body,
+                };
+            }
 
-            const data = JSON.parse(body);
-            if (!Array.isArray(data?.cities)) throw new Error('The destination directory has no cities array.');
-            return data;
+            const error = new Error(`HTTP ${response.status}`);
+            error.status = response.status;
+            throw error;
         } catch (error) {
             lastError = error;
-            if (attempt < API_MAX_ATTEMPTS - 1) {
-                log.warning(`Destination directory page ${page} attempt ${attempt + 1}/${API_MAX_ATTEMPTS} failed: ${error.message}`);
-            }
+            const retryable = error.status === 429 || error.status >= 500 || error.status == null;
+            if (!retryable || attempt === API_MAX_ATTEMPTS) break;
+
+            log.warning(`Request attempt ${attempt}/${API_MAX_ATTEMPTS} failed: ${error.message}`);
+            await waitForRetry(attempt, error.status);
         }
     }
 
-    throw new Error(`Unable to fetch destination directory page ${page}: ${lastError?.message || 'unknown error'}`);
+    throw lastError || new Error('HTTP request failed.');
 }
 
-function buildCityPageUrl(city, filterKeyword) {
-    const pageUrl = new URL(city.url, 'https://www.hellotickets.com');
-    if (hasValue(filterKeyword)) pageUrl.searchParams.set('qs', String(filterKeyword).trim());
-    return pageUrl.href;
-}
-
-function matchesCityLocation(city, locationTerms) {
-    const haystack = tokenize(
-        [city.name, city.slugName, city.state, city.country, city.countrySlugName, city.url]
-            .filter(Boolean)
-            .join(' '),
-    );
-
-    return locationTerms.every((term) => haystack.includes(term));
-}
-
-function getRequestHeaders(referer) {
-    return {
-        'user-agent': USER_AGENTS[0],
-        accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9',
-        referer,
-        origin: 'https://www.hellotickets.com',
-    };
+async function waitForRetry(attempt, status) {
+    const delay = status === 429 ? attempt * 1000 + Math.round(Math.random() * 500) : attempt * 500;
+    await new Promise((resolve) => {
+        setTimeout(resolve, delay);
+    });
 }
 
 function normalizePositiveInteger(value, fallback) {
@@ -206,22 +99,13 @@ function normalizePositiveInteger(value, fallback) {
     return parsed;
 }
 
-function hasValue(value) {
-    return typeof value === 'string' ? value.trim().length > 0 : value != null;
-}
-
-function isPrefilledStartUrl(value) {
-    try {
-        return normalizeHttpUrl(value) === normalizeHttpUrl(PREFILLED_START_URL);
-    } catch {
-        return false;
-    }
-}
-
 function normalizeHttpUrl(value) {
     try {
         const url = new URL(String(value));
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol');
+        if (!['hellotickets.com', 'www.hellotickets.com'].includes(url.hostname)) {
+            throw new Error('unsupported host');
+        }
         return url.href;
     } catch {
         throw new Error('startUrl must be a valid HTTP or HTTPS Hellotickets URL.');
@@ -232,19 +116,11 @@ function parseTargetContext(urlValue) {
     const parsedUrl = new URL(urlValue);
     const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
     const citySegmentIndex = pathSegments.findIndex((segment) => /^c-\d+$/i.test(segment));
-
-    if (parsedUrl.hostname !== 'www.hellotickets.com' || citySegmentIndex < 1) {
-        throw new Error(
-            'startUrl must be a public Hellotickets city or category URL containing a /c-<cityId> path segment.',
-        );
-    }
-
-    const citySegment = pathSegments[citySegmentIndex];
-    const citySlug = pathSegments[citySegmentIndex - 1];
+    const citySlug = citySegmentIndex > 0 ? pathSegments[citySegmentIndex - 1] : pathSegments[1];
+    const cityId = citySegmentIndex > 0 ? pathSegments[citySegmentIndex].slice(2) : undefined;
     const locale = pathSegments[0] || 'us';
-    const cityId = citySegment.slice(2);
-    const queryKeyword = parsedUrl.searchParams.get('qs') || '';
-    const pageTitle = queryKeyword || `${formatSlug(citySlug)} experiences`;
+    const lastSegment = pathSegments[pathSegments.length - 1] || 'Hellotickets listings';
+    const pageTitle = parsedUrl.searchParams.get('qs') || formatSlug(lastSegment.replace(/-\d+$/, ''));
 
     return {
         cityId,
@@ -253,66 +129,130 @@ function parseTargetContext(urlValue) {
         pageUrl: parsedUrl.href,
         pageTitle,
         baseOrigin: parsedUrl.origin,
+        city: citySlug ? { id: cityId, slugName: citySlug } : undefined,
     };
 }
 
-async function fetchCityCatalog(context, { logResult = true } = {}) {
-    const apiUrl = `${context.baseOrigin}/api/cities/${context.cityId}/top-subcategories?carouselItemsAmount=${API_PAGE_SIZE}`;
-    let lastError;
+async function fetchPageRecords(context) {
+    try {
+        const response = await fetchWithImpit(context.pageUrl, {
+            headers: {
+                referer: `${context.baseOrigin}/`,
+                origin: context.baseOrigin,
+            },
+        });
+        const payload = parseNuxtPayload(response.body);
+        const records = extractPageRecords(payload, context);
+        log.info(`Fetched URL payload | records=${records.length}`);
+        return records;
+    } catch (error) {
+        throw new Error(`Unable to fetch Hellotickets URL: ${error.message}`);
+    }
+}
 
-    for (let attempt = 0; attempt < API_MAX_ATTEMPTS; attempt += 1) {
-        const userAgent = USER_AGENTS[attempt % USER_AGENTS.length];
+function extractPageRecords(nuxtPayload, context) {
+    const pageData = nuxtPayload?.data?.[0] || {};
+    const recordsByKey = new Map();
 
-        try {
-            const response = await gotScraping.get(apiUrl, {
-                headers: {
-                    'user-agent': userAgent,
-                    accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
-                    'accept-language': 'en-US,en;q=0.9',
-                    referer: context.pageUrl,
-                    origin: context.baseOrigin,
-                },
-                useHeaderGenerator: false,
-                http2: false,
-                throwHttpErrors: false,
-                timeout: { request: REQUEST_TIMEOUT_MS },
-            });
-
-            const contentType = String(response.headers['content-type'] || '');
-            const body = String(response.body || '');
-
-            if (response.statusCode < 200 || response.statusCode >= 300) {
-                throw new Error(`HTTP ${response.statusCode}`);
-            }
-
-            if (
-                !contentType.includes('json') ||
-                /<title>Just a moment|cf-chl-|Enable JavaScript and cookies/i.test(body)
-            ) {
-                throw new Error('The response was not a usable JSON catalog.');
-            }
-
-            const data = JSON.parse(body);
-            if (!Array.isArray(data?.subcategories)) {
-                const keys = Object.keys(data || {}).join(', ') || 'none';
-                throw new Error(`The JSON response has no subcategories array. Keys: ${keys}`);
-            }
-
-            if (logResult) {
-                log.info(`Fetched city catalog | city=${context.cityId} | subcategories=${data.subcategories.length}`);
-            }
-            return data;
-        } catch (error) {
-            lastError = error;
-            if (attempt < API_MAX_ATTEMPTS - 1) {
-                log.warning(`Catalog request attempt ${attempt + 1}/${API_MAX_ATTEMPTS} failed: ${error.message}`);
-            }
+    if (Array.isArray(pageData.topSubcategories)) {
+        for (const record of extractRecords({ subcategories: pageData.topSubcategories }, context)) {
+            recordsByKey.set(String(record.alias_id || record.id || record.product_url), record);
         }
     }
 
-    throw new Error(
-        `Unable to fetch the Hellotickets JSON catalog after ${API_MAX_ATTEMPTS} attempts: ${lastError?.message || 'unknown error'}`,
-    );
+    for (const record of extractPagePayloadRecords(nuxtPayload, context.pageUrl, {
+        name: context.pageTitle,
+        city: context.city,
+    }, context.pageTitle)) {
+        const key = String(record.alias_id || record.id || record.product_url);
+        const existing = recordsByKey.get(key);
+        recordsByKey.set(key, existing ? mergeRecords(existing, record) : record);
+    }
+
+    return Array.from(recordsByKey.values());
+}
+
+function parseNuxtPayload(html) {
+    const marker = 'window.__NUXT__=';
+    const markerIndex = html.indexOf(marker);
+    if (markerIndex < 0) throw new Error('The URL did not contain a Nuxt data payload.');
+
+    const scriptEnd = html.indexOf('</script>', markerIndex);
+    if (scriptEnd < 0) throw new Error('The Nuxt data script was incomplete.');
+
+    const expression = html.slice(markerIndex + marker.length, scriptEnd);
+    try {
+        return vm.runInNewContext(expression, Object.create(null), { timeout: 2000 });
+    } catch {
+        throw new Error('The Nuxt data payload could not be parsed.');
+    }
+}
+
+function extractPagePayloadRecords(nuxtPayload, pageUrl, hit, pageTitle) {
+    const page = nuxtPayload?.data?.[0] || {};
+    const rawItems = [];
+
+    if (page.event) rawItems.push(page.event);
+    if (Array.isArray(page.searchItems)) rawItems.push(...page.searchItems);
+
+    const layoutEvents = page.layoutAttributes?.events;
+    if (Array.isArray(layoutEvents)) {
+        rawItems.push(...layoutEvents);
+    } else if (layoutEvents && typeof layoutEvents === 'object') {
+        rawItems.push(...Object.values(layoutEvents));
+    }
+
+    const performanceMonths = page.performancesList?.items;
+    if (performanceMonths && typeof performanceMonths === 'object') {
+        for (const month of Object.values(performanceMonths)) {
+            if (Array.isArray(month?.perfs)) rawItems.push(...month.perfs);
+        }
+    }
+
+    if (Array.isArray(page.relatedEvents)) rawItems.push(...page.relatedEvents);
+    if (Array.isArray(page.relatedMatches)) rawItems.push(...page.relatedMatches);
+
+    return rawItems
+        .map((item) => normalizePageRecord(item, pageUrl, hit, pageTitle))
+        .filter(Boolean);
+}
+
+function normalizePageRecord(candidate, pageUrl, hit, pageTitle) {
+    const city = candidate.city || candidate.venue?.city || hit.city || {};
+    const pathSegments = new URL(pageUrl).pathname.split('/').filter(Boolean);
+    const citySlug = city.slugName || city.slug || hit.city?.slugName || hit.city?.slug;
+    const productUrl = toAbsoluteUrl(candidate.url || hit.url || pageUrl, 'https://www.hellotickets.com');
+    if (!productUrl || (!candidate.id && !candidate.name && !candidate.title)) return null;
+
+    return pruneEmptyValues({
+        id: candidate.aliasId || candidate.id,
+        alias_id: candidate.aliasId,
+        title: candidate.title || candidate.name,
+        origin_title: candidate.originTitle || candidate.originName || candidate.name,
+        short_description: stripHtml(candidate.description),
+        price: candidate.price,
+        currency_code: candidate.currencyCode || candidate.currency,
+        rating: candidate.rating,
+        review_count: candidate.reviewCount,
+        image_url: toAbsoluteUrl(
+            candidate.thumbnailHiResUrl || candidate.thumbnailUrl || candidate.imageUrl || candidate.image || hit.image,
+            'https://www.hellotickets.com',
+        ),
+        product_url: productUrl,
+        merchant_cancellable: candidate.merchantCancellable,
+        is_product_or_alias: candidate.isProductOrAlias ?? true,
+        service: candidate.provider,
+        source_section: 'page_payload',
+        source_sections: ['page_payload'],
+        source_collection_id: hit.id,
+        source_collection_title: hit.name || pageTitle,
+        source_collection_url: toAbsoluteUrl(hit.url || pageUrl, 'https://www.hellotickets.com'),
+        city_id: city.id || hit.city?.id,
+        city_slug: citySlug,
+        locale: pathSegments[0],
+        page_url: pageUrl,
+        page_title: pageTitle,
+    });
 }
 
 function extractRecords(apiData, context) {
@@ -435,18 +375,6 @@ function normalizeProductRecord(candidate, context) {
     });
 }
 
-function matchesKeyword(record, filterKeyword) {
-    const terms = tokenize(filterKeyword);
-    if (terms.length === 0) return true;
-
-    const haystack = tokenize(
-        [record.title, record.origin_title, record.short_description, record.service, record.source_collection_title]
-            .filter(Boolean)
-            .join(' '),
-    ).join(' ');
-
-    return terms.every((term) => haystack.includes(term));
-}
 
 function matchesLocation(record, filterLocation) {
     const terms = tokenize(filterLocation);

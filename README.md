@@ -1,6 +1,6 @@
 ## What does Hellotickets Listings Scraper do?
 
-Hellotickets Listings Scraper collects structured tours, attraction tickets, city passes, and other travel experiences from public Hellotickets city and category pages. Provide one Hellotickets listing URL, optionally filter by keyword or location, and choose the maximum number of records to save. The result is a clean dataset with titles, prices, currencies, ratings, review counts, durations, ticket features, provider information, and source context.
+Hellotickets Listings Scraper collects structured tours, attraction tickets, city passes, events, and other travel experiences from public Hellotickets URLs. Provide a city, category, event, venue, performer, lineup, or search URL, optionally filter by location, and choose the maximum number of records to save. The result is a clean dataset with titles, prices, currencies, ratings, review counts, durations, ticket features, provider information, and source context.
 
 Use the dataset for travel market research, destination catalog building, experience comparison, price tracking, content planning, and recurring checks of public listings. The Actor also discovers related collections from the selected page, which helps find more unique experiences than the first visible group of listings alone.
 
@@ -66,24 +66,23 @@ Each dataset item represents one unique Hellotickets experience. The exact field
 
 ## How to use Hellotickets Listings Scraper
 
-1. Provide a Hellotickets city or category URL in `startUrl` to search that catalog.
-2. Provide only `keyword` to search across the worldwide Hellotickets destination directory.
-3. Provide `keyword` and `location` to search matching cities, states, countries, or locales.
-4. Leave all search fields empty to run the prefilled example destination.
-5. Set `results_wanted` to the maximum number of unique listings you want.
+1. Provide any public Hellotickets city, category, event, venue, performer, lineup, or search URL in `startUrl`.
+2. Optionally provide `location` to keep only records matching the supplied location.
+3. Leave `startUrl` empty to run the prefilled example destination.
+4. Set `results_wanted` to the maximum number of unique listings you want.
 6. Run the Actor and review the dataset preview.
 7. Download the results or connect the dataset to your research, reporting, or automation workflow.
 
 ## Input Parameters
 
-| Parameter        | Type    | Required | Default                                                      | Description                                                                                        |
-| ---------------- | ------- | -------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `startUrl`       | String  | No       | `https://www.hellotickets.com/us/new-york/c-1?qs=New%20York` | Optional public Hellotickets city or category URL.                                                |
-| `keyword`        | String  | No       | Empty                                                        | Terms matched against listing titles, descriptions, providers, and collection names.              |
-| `location`       | String  | No       | Empty                                                        | City, state, country, or locale used to select destinations when no URL is supplied.               |
-| `results_wanted` | Integer | No       | `20`                                                         | Maximum number of unique tour, ticket, pass, or experience listings to save. Minimum value is `1`. |
+| Parameter           | Type    | Required | Default                                                      | Description                                                                                         |
+| ------------------- | ------- | -------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `startUrl`          | String  | No       | `https://www.hellotickets.com/us/new-york/c-1?qs=New%20York` | Any public Hellotickets city, category, event, venue, performer, lineup, or search URL.             |
+| `location`          | String  | No       | Empty                                                        | Optional city, state, country, or locale filter applied to records returned by `startUrl`.          |
+| `results_wanted`    | Integer | No       | `20`                                                         | Maximum number of unique tour, ticket, pass, or experience listings to save. Minimum value is `1`. |
+| `proxyConfiguration`| Object  | No       | Empty                                                        | Optional Apify or custom proxy settings for Cloudflare-protected requests.                         |
 
-When `startUrl` is supplied, the city is selected from its `/c-<cityId>` segment. When it is omitted and a search option is supplied, the Actor discovers destinations from Hellotickets' worldwide city directory and searches catalogs until it reaches `results_wanted` or exhausts the matching destinations.
+The Actor requests only the supplied URL and extracts the page structures available there. It does not scan the worldwide destination directory. If Hellotickets challenges the Apify Cloud origin, provide an Apify or custom proxy through `proxyConfiguration`; the same proxy session is reused for the run.
 
 ## Output Data
 
@@ -102,25 +101,25 @@ Collect up to 20 unique listings from a New York city page.
 }
 ```
 
-### Worldwide Keyword Search
+### Category or Search URL
 
-Use only `keyword` to search worldwide instead of falling back to New York.
+Use any public Hellotickets category or search URL directly.
 
 ```json
 {
-    "keyword": "Broadway",
+    "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=Broadway",
     "results_wanted": 50
 }
 ```
 
-### Keyword and Location Search
+### URL with Location Filter
 
-Use `location` to limit broad search to matching cities or countries.
+Use `location` to keep only records whose page or listing context matches the supplied location.
 
 ```json
 {
-    "keyword": "museum",
-    "location": "United States",
+    "startUrl": "https://www.hellotickets.com/united-kingdom/london/theatre/musicals-tickets",
+    "location": "London",
     "results_wanted": 50
 }
 ```
@@ -196,7 +195,7 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 - **Test with a small target** - Start with `results_wanted: 20` and inspect the dataset before requesting a larger collection.
 - **Match the target to the destination** - Smaller destinations may contain fewer unique experiences than major travel markets.
 - **Use query variations carefully** - Different `qs` values can surface different experiences, but similar queries may return overlapping listings.
-- **Search broadly when needed** - Use keyword-only for worldwide discovery, or add `location` to limit the destination directory before catalogs are fetched.
+- **Use the most specific URL available** - City, category, event, venue, performer, lineup, and search URLs are fetched directly without worldwide directory scanning.
 - **Schedule destination checks** - Recurring runs are useful for tracking changes in prices, ratings, review counts, and visible inventory.
 
 ## Integrations and export formats
@@ -218,11 +217,11 @@ This example shows one realistic dataset item. Some optional fields may be omitt
 
 ### Can I collect tours and attraction tickets from any Hellotickets destination?
 
-Yes. Use a public Hellotickets city or category page as `startUrl`, or omit the URL and use a keyword to search the worldwide destination directory.
+Yes. Provide the public Hellotickets city, category, event, venue, performer, lineup, or search URL as `startUrl`.
 
-### Can I search with a keyword?
+### Can I use a Hellotickets search URL?
 
-Yes. Enter a value in `keyword` to match listing titles, original titles, descriptions, providers, and collection names. You can also preserve a Hellotickets `qs` value in `startUrl`.
+Yes. Provide the complete public search URL in `startUrl`. The Actor follows the URL exactly and extracts the records exposed by that page.
 
 ### Can I filter by location?
 

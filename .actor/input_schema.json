@@ -7,21 +7,15 @@
         "startUrl": {
             "title": "Start URL",
             "type": "string",
-            "description": "Optional Hellotickets city or category URL. If omitted while keyword or location is provided, the Actor searches the Hellotickets destination directory.",
+            "description": "Any public Hellotickets city, category, event, venue, performer, or search URL.",
             "editor": "textfield",
             "prefill": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York"
         },
-        "keyword": {
-            "title": "Keyword",
-            "type": "string",
-            "description": "Optional keyword filter applied to listing titles, descriptions, providers, and collection names.",
-            "editor": "textfield",
-            "prefill": ""
-        },
+
         "location": {
             "title": "Location",
             "type": "string",
-            "description": "Optional city, state, country, or locale filter. Without a URL, matching destinations are searched across the Hellotickets worldwide directory.",
+            "description": "Optional city, state, country, or locale filter applied to records returned by the supplied URL.",
             "editor": "textfield",
             "prefill": ""
         },
@@ -33,6 +27,16 @@
             "default": 20,
             "prefill": 20,
             "editor": "number"
+        },
+        "proxyConfiguration": {
+            "title": "Proxy configuration",
+            "type": "object",
+            "description": "Optional Apify or custom proxy configuration for protected site requests.",
+            "editor": "proxy",
+            "default": {},
+            "prefill": {
+                "useApifyProxy": false
+            }
         }
     },
     "required": [],
