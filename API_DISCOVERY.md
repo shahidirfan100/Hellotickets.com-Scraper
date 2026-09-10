@@ -37,5 +37,5 @@ All supported page structures are normalized into the existing dataset field nam
 - `startUrl` is normalized and validated as an HTTP(S) Hellotickets URL.
 - The parser derives context from any URL path without requiring a `/c-<cityId>` segment.
 - Results are deduplicated by stable alias ID, listing ID, or normalized product URL.
-- `location` filters the returned records using city, locale, page URL, page title, product URL, and collection context.
+
 - An empty result is treated as an error rather than a successful empty run.

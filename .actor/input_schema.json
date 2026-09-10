@@ -11,14 +11,6 @@
             "editor": "textfield",
             "prefill": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York"
         },
-
-        "location": {
-            "title": "Location",
-            "type": "string",
-            "description": "Optional city, state, country, or locale filter applied to records returned by the supplied URL.",
-            "editor": "textfield",
-            "prefill": ""
-        },
         "results_wanted": {
             "title": "Maximum number of items",
             "type": "integer",

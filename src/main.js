@@ -9,7 +9,7 @@ const API_MAX_ATTEMPTS = 3;
 await Actor.init();
 
 const input = (await Actor.getInput()) || {};
-const { startUrl = '', location = '', results_wanted: rawResultsWanted = 20 } = input;
+const { startUrl = '', results_wanted: rawResultsWanted = 20 } = input;
 const proxyInput = input.proxyConfiguration || {};
 const hasCustomProxyUrls = Array.isArray(proxyInput.proxyUrls) && proxyInput.proxyUrls.length > 0;
 const shouldUseProxy = Boolean(proxyInput.useApifyProxy || hasCustomProxyUrls);
@@ -31,10 +31,10 @@ const resultsWanted = normalizePositiveInteger(rawResultsWanted, 20);
 const targetUrl = normalizeHttpUrl(startUrl || PREFILLED_START_URL);
 
 try {
-    const items = await searchUrl(targetUrl, location, resultsWanted);
+    const items = await searchUrl(targetUrl, resultsWanted);
 
     if (items.length === 0) {
-        throw new Error('The Hellotickets URL returned no matching listings. Check the URL or location filter.');
+        throw new Error('The Hellotickets URL returned no listings. Check the URL and try another public page.');
     }
 
     await Actor.pushData(items);
@@ -43,15 +43,13 @@ try {
     await Actor.exit();
 }
 
-async function searchUrl(targetUrlValue, filterLocation, limit) {
+async function searchUrl(targetUrlValue, limit) {
     const targetContext = parseTargetContext(targetUrlValue);
     log.info(`Start run | mode=url | target=${targetUrlValue} | results=${limit}`);
 
     const records = await fetchPageRecords(targetContext);
-    const filteredRecords = records.filter((record) => matchesLocation(record, filterLocation));
-
-    log.info(`Page records=${records.length} | after_location_filter=${filteredRecords.length}`);
-    return filteredRecords.slice(0, limit);
+    log.info(`Page records=${records.length}`);
+    return records.slice(0, limit);
 }
 
 async function fetchWithImpit(url, options = {}) {
@@ -376,35 +374,6 @@ function normalizeProductRecord(candidate, context) {
 }
 
 
-function matchesLocation(record, filterLocation) {
-    const terms = tokenize(filterLocation);
-    if (terms.length === 0) return true;
-
-    const haystack = tokenize(
-        [
-            record.city_slug,
-            record.locale,
-            record.page_url,
-            record.page_title,
-            record.product_url,
-            record.source_collection_title,
-        ]
-            .filter(Boolean)
-            .join(' '),
-    ).join(' ');
-
-    return terms.every((term) => haystack.includes(term));
-}
-
-function tokenize(value) {
-    return String(value || '')
-        .toLowerCase()
-        .replace(/[-_/]+/g, ' ')
-        .replace(/[^\p{L}\p{N}]+/gu, ' ')
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-}
 
 function mergeRecords(existing, incoming) {
     const merged = { ...existing };

@@ -1,7 +1,6 @@
 {
     "startUrl": "https://www.hellotickets.com/us/new-york/c-1?qs=New%20York",
 
-    "location": "",
     "proxyConfiguration": {
         "useApifyProxy": false
     },
